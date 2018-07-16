@@ -39,7 +39,7 @@ class Trip:
     def __init__(self, _tmpIn):
         self.route = _tmpIn[1]
         self.type = _tmpIn[2]
-        self.capacity = int(_tmpIn[3])
+        self.capacity = int(_tmpIn[3]) # The index should be 4 as 3 represents the departure time
         self.nodes = []
         self.links = []
 class Node:
@@ -56,7 +56,7 @@ class Node:
         self.last = 0 # If takes the value one indicate that the node is the last stop of the trip
         self.outLinks = []
         self.inLinks = []
-        self.labels = (999999.0,999999.0) #time, cost
+        self.labels = (999999.0,999999.0) # time, cost
         self.preds = ("","")
 class Link:
     def __init__(self, _from, _to, _by, _time):
@@ -106,6 +106,7 @@ def readTrips():
         tripSet[tmpIn[0]] = Trip(tmpIn) # This is the list of all the trips. The trip route, type, capacity is added now. The node and link lists will be edited later
     inFile.close()
     print len(tripSet), "trips"
+
 def readSchedule():
     inFile = open(inputDataLocation+"ft_input_stopTimes.dat")
     tmpIn = inFile.readline().strip().split("\t")
@@ -232,18 +233,17 @@ def readDemand():
 def sortConnectors(): # This is important to sort all the links according to their departure timt
     for node in nodeSet:
         if len(nodeSet[node].inLinks)>1:
-
             # This will sort all the link associated with the node by mean time of the departure from upnode + time to traverse the link (e.g. walking link)
             nodeSet[node].inLinks.sort(key=lambda x: nodeSet[linkSet[x].fromNode].meanTime+linkSet[x].time)
 
 ################################################################################################
 def findShortestPath(orig, PDT, pathType):
     for n in nodeSet:
-        nodeSet[n].labels = (999999, 999999, 1.0) # This is time, cost and don't know the third value
-        nodeSet[n].pred = ("", "") # This is current node and link
+        nodeSet[n].labels = (999999, 999999, 1.0) # This is time of next departure from this node, cost of reaching up to this node and don't know the third value
+        nodeSet[n].pred = ("", "") # This is current node (which is gonna be pred to the outlink node) and link
     if zoneSet[orig].nodes==[]: # If there is no nodes to go from the TAZ, then return -1
         return -1
-    accessNode = zoneSet[orig].nodes[0] # This is the access link
+    accessNode = zoneSet[orig].nodes[0] # This is the access node, 0 is the key for access node and 1 is the node for egress node
     nodeSet[accessNode].labels = (PDT,0,1) # We assign the label equal to the PDT and cost = 0
     #SE = [accessNode]
     SE = [((nodeSet[accessNode].labels[2], accessNode))]
@@ -253,34 +253,48 @@ def findShortestPath(orig, PDT, pathType):
         #currentNode = SE[0]
         #currentLabels = nodeSet[currentNode].labels
         #SE.remove(currentNode)
-        currentNode = heapq.heappop(SE)[1]
+        currentNode = heapq.heappop(SE)[1] # Putting and poping out the node from the heap structure
         currentLabels = nodeSet[currentNode].labels
         it = it+1
-        for link in nodeSet[currentNode].outLinks:
+        for link in nodeSet[currentNode].outLinks: # for all the outlinks
             newNode = linkSet[link].toNode
             newPreds = [currentNode, link]
             existingLabels = nodeSet[newNode].labels
             newLabels = []
+            # Weights are in this order
+            # IVT, WT, WK, TR
+
             ### Calculate new labels
             if linkSet[link].trip=="access":
+                # The next bus should be within 30 seconds of waiting time.
                 if PDT+linkSet[link].time<=nodeSet[newNode].meanTime and PDT+linkSet[link].time+30>nodeSet[newNode].meanTime:
+                    # This is the time of train departure at the new node
                     newLabels.append(round(nodeSet[newNode].meanTime,3))
+                    # Adding the generalized cost, one if the walking time and other is the waiting time.
                     newLabels.append(round(weights[2]*linkSet[link].time+weights[1]*(nodeSet[newNode].meanTime-linkSet[link].time-PDT),3))
                 else:
                     continue
             # Weights are in this order
             # IVT, WT, WK, TR
             elif linkSet[link].trip=="egress":
+                # Then time of arrival to the last node should be current label + egress walking time
                 newLabels.append(round(currentLabels[0]+linkSet[link].time,3))
+                # We will add the walking time to the overall cost
                 newLabels.append(round(currentLabels[1]+weights[2]*linkSet[link].time,3))
             elif linkSet[link].trip=="waitingtransfer":
+                # Then add the time of departure from the next node
                 newLabels.append(round(nodeSet[newNode].meanTime,3))
+                # Add the cost of transfer weight (Just add this cuz their no walking time is involved) + waiting time
                 newLabels.append(round(currentLabels[1]+weights[3]+weights[1]*(nodeSet[newNode].meanTime-nodeSet[currentNode].meanTime),3))
             elif linkSet[link].trip=="walkingtransfer":
+                # Then add the time of departure from the next node
                 newLabels.append(round(nodeSet[newNode].meanTime,3))
+                # Add the cost of transfering weight, walking time, waiting time
                 newLabels.append(round(currentLabels[1]+weights[3]+weights[2]*linkSet[link].time+weights[1]*(nodeSet[newNode].meanTime-nodeSet[currentNode].meanTime-linkSet[link].time),3))
             else:
+                # Then add the time of departure from the next node
                 newLabels.append(round(nodeSet[newNode].meanTime,3))
+                # # Add the cost of in-vehicle time
                 newLabels.append(round(currentLabels[1]+weights[0]*(nodeSet[newNode].meanTime-nodeSet[currentNode].meanTime),3))
             ### Update the node labels
             if pathType=="fastest" and newLabels[0]<existingLabels[0]:
@@ -301,8 +315,8 @@ def findShortestPath(orig, PDT, pathType):
                     heapq.heappush(SE, (newLabels[2], newNode))
     return [it, iLabel]
 def getShortetstPath(dest):
-    currentNode = zoneSet[dest].nodes[1]
-    if nodeSet[currentNode].labels[1]>=999999:
+    currentNode = zoneSet[dest].nodes[1] # This is the egress node
+    if nodeSet[currentNode].labels[1] >= 999999: # This means shortest path was never calculated!
         return []
     path = []
     while currentNode!="":
@@ -374,7 +388,7 @@ tripSet = {}
 nodeSet = {}
 linkSet = {}
 passengerSet = {}
-weights = [1.0, 1.0, 1.0, 0.0] #IVT, WT, WK, TR
+weights = [1.0, 1.0, 1.0, 0.0] # IVT, WT, WK, TR
 
 readZones()
 readStops()
